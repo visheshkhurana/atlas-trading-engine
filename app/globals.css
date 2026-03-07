@@ -3,51 +3,153 @@
 @tailwind utilities;
 
 :root {
-  --atlas-bg: #0a0a0f;
-  --atlas-card: #111118;
-  --atlas-border: #1e1e2e;
-  --atlas-accent: #00ff88;
-  --atlas-profit: #00ff88;
-  --atlas-loss: #ff4444;
-  --atlas-warning: #ffaa00;
+  /* OKX-inspired color palette */
+  --bg-primary: #121212;
+  --bg-secondary: #1a1a1a;
+  --bg-tertiary: #222222;
+  --bg-hover: #2a2a2a;
+  --border: #2a2a2a;
+  --border-light: #333333;
+  --text-primary: #ffffff;
+  --text-secondary: #a1a1a1;
+  --text-tertiary: #6b6b6b;
+  --green: #00b853;
+  --green-bg: rgba(0, 184, 83, 0.08);
+  --red: #ff4d4f;
+  --red-bg: rgba(255, 77, 79, 0.08);
+  --blue: #1677ff;
+  --yellow: #faad14;
+  --yellow-bg: rgba(250, 173, 20, 0.08);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--atlas-bg);
-  background-image: 
-    linear-gradient(rgba(30, 30, 46, 0.3) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(30, 30, 46, 0.3) 1px, transparent 1px);
-  background-size: 50px 50px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
 }
-
-.glass-card {
-  background: rgba(17, 17, 24, 0.8);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(30, 30, 46, 0.6);
-  border-radius: 12px;
-}
-
-.glow-green { box-shadow: 0 0 20px rgba(0, 255, 136, 0.1); }
-.glow-red { box-shadow: 0 0 20px rgba(255, 68, 68, 0.1); }
-
-.ticker-scroll {
-  animation: scroll 30s linear infinite;
-}
-
-@keyframes scroll {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
-}
-
-@keyframes pulse-green {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-.animate-pulse-green { animation: pulse-green 2s ease-in-out infinite; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--atlas-bg); }
-::-webkit-scrollbar-thumb { background: var(--atlas-border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #2a2a3e; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #444; }
+
+/* OKX-style utility classes */
+@layer components {
+  .okx-card {
+    @apply rounded-lg;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+  }
+  .okx-card-flat {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+  }
+  .okx-input {
+    @apply w-full rounded px-3 py-2 text-sm outline-none transition-colors;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+  }
+  .okx-input:focus {
+    border-color: var(--blue);
+  }
+  .okx-input::placeholder {
+    color: var(--text-tertiary);
+  }
+  .okx-btn {
+    @apply px-4 py-2 rounded text-sm font-medium transition-all cursor-pointer;
+  }
+  .okx-btn-green {
+    background: var(--green);
+    color: #fff;
+  }
+  .okx-btn-green:hover {
+    background: #00a34a;
+  }
+  .okx-btn-red {
+    background: var(--red);
+    color: #fff;
+  }
+  .okx-btn-red:hover {
+    background: #e04345;
+  }
+  .okx-btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+  }
+  .okx-btn-ghost:hover {
+    color: var(--text-primary);
+    border-color: var(--border-light);
+    background: var(--bg-hover);
+  }
+  .green-text { color: var(--green); }
+  .red-text { color: var(--red); }
+  .muted-text { color: var(--text-secondary); }
+  .dim-text { color: var(--text-tertiary); }
+
+  .okx-table th {
+    @apply text-left text-xs font-normal py-2.5 px-3;
+    color: var(--text-tertiary);
+    border-bottom: 1px solid var(--border);
+  }
+  .okx-table td {
+    @apply py-2.5 px-3 text-sm;
+    border-bottom: 1px solid var(--border);
+  }
+  .okx-table tr:hover td {
+    background: var(--bg-hover);
+  }
+  .okx-tab {
+    @apply px-4 py-2.5 text-sm cursor-pointer transition-colors relative;
+    color: var(--text-secondary);
+  }
+  .okx-tab:hover {
+    color: var(--text-primary);
+  }
+  .okx-tab-active {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .okx-tab-active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--text-primary);
+  }
+  .okx-badge {
+    @apply text-xs px-1.5 py-0.5 rounded;
+  }
+  .okx-badge-green {
+    background: var(--green-bg);
+    color: var(--green);
+  }
+  .okx-badge-red {
+    background: var(--red-bg);
+    color: var(--red);
+  }
+  .okx-badge-yellow {
+    background: var(--yellow-bg);
+    color: var(--yellow);
+  }
+}
+
+/* Tailwind overrides for OKX theme */
+@layer utilities {
+  .atlas-bg { background-color: var(--bg-primary); }
+  .atlas-card-bg { background-color: var(--bg-secondary); }
+}
