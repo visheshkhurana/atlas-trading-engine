@@ -1,0 +1,17 @@
+# ATLAS — Docker ignore
+node_modules
+.next
+.vercel
+.git
+.env
+.env.local
+*.md
+app/
+*.config.js
+*.config.ts
+tsconfig.json
+package.json
+package-lock.json
+__pycache__
+*.pyc
+.pytest_cache
