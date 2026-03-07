@@ -2,6 +2,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts'
+import dynamic from 'next/dynamic'
+
+const TradingChart = dynamic(() => import('./components/TradingChart'), { ssr: false })
+const OrderBook = dynamic(() => import('./components/OrderBook'), { ssr: false })
+const Analytics = dynamic(() => import('./components/Analytics'), { ssr: false })
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
@@ -173,7 +178,7 @@ export default function Dashboard() {
     setTimeout(()=>setOrderStatus(''), 5000)
   }
 
-  const tabs = ['overview','trade','positions','strategies','risk']
+  const tabs = ['overview','trade','positions','strategies','analytics','risk']
   const fmtTime = (ts:string) => ts ? new Date(ts).toLocaleString() : '—'
   const fmtPrice = (p:any) => p ? '$'+parseFloat(p).toLocaleString() : '—'
 
@@ -345,7 +350,14 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-            <div className="flex-1 overflow-auto">
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* TradingView Chart */}
+              <div style={{height:'55%', borderBottom:'1px solid var(--border)'}}>
+                <TradingChart symbol={orderSymbol.replace('/','-')} />
+              </div>
+              {/* Trade History below chart */}
+              <div className="flex-1 overflow-auto">
+
               <div className="flex items-center justify-between p-4 pb-2">
                 <span className="text-sm font-medium">Trade History <span className="text-xs" style={{color:'var(--text-tertiary)'}}>({trades.length})</span></span>
                 <button onClick={loadData} className="text-xs px-2 py-1 rounded" style={{background:'var(--bg-tertiary)',color:'var(--text-tertiary)'}}>↻ Refresh</button>
@@ -455,7 +467,9 @@ export default function Dashboard() {
             </div>
           </div>
         )}
-        {activeTab === 'risk' && (
+        
+        {activeTab === 'analytics' && <Analytics />}
+{activeTab === 'risk' && (
           <div className="p-5 space-y-4">
             <div className="grid grid-cols-3 gap-4">
               {[
