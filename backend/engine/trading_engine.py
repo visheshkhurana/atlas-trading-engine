@@ -3,7 +3,7 @@
 Pipeline:
   MarketDataEngine -> Strategies -> RegimeDetector -> DecisionAgent
   -> PortfolioAgent -> PositionScalingManager -> RiskManager
-  -> LiveExecution (Kraken spot / OKX perp) -> Supabase logging
+  -> LiveExecution (OKX spot for LONG / OKX perp for SHORT) -> Supabase logging
 """
 
 import asyncio
@@ -186,10 +186,10 @@ class TradingEngine:
     async def run(self):
         self.running = True
         logger.info(
-            "ATLAS Engine started | paper=%s | interval=%ss | vol_pause=%.2f",
+            "ATLAS Engine started | paper=%s | interval=%ss | vol_pause=%.2f | exchange=OKX",
             PAPER_MODE, LOOP_INTERVAL, VOLATILITY_PAUSE_THRESHOLD,
         )
-        await self._log_alert("info", "ATLAS Engine started")
+        await self._log_alert("info", "ATLAS Engine started — OKX primary")
 
         while self.running:
             cycle_start = time.monotonic()
@@ -289,13 +289,13 @@ class TradingEngine:
                         logger.info("Trade rejected by risk manager: %s", trade.get("symbol"))
                         continue
 
-                    # route: LONG -> Kraken spot, SHORT -> OKX perp
+                    # ── ALL trades go to OKX ──
+                    # LONG -> OKX spot  |  SHORT -> OKX perp
                     side = trade.get("side", "buy")
-                    if side in ("buy", "long"):
-                        exchange = "kraken"
-                    else:
-                        exchange = "okx"
+                    exchange = "okx"
                     trade["exchange"] = exchange
+
+                    trade_type = "spot" if side in ("buy", "long") else "perp"
 
                     # execute
                     if PAPER_MODE:
@@ -305,9 +305,9 @@ class TradingEngine:
                             "status": "paper_filled",
                         }
                         logger.info(
-                            "[PAPER] %s %s %.6f @ %.2f on %s",
+                            "[PAPER] %s %s %.6f @ %.2f on OKX %s",
                             side.upper(), trade["symbol"],
-                            trade["size"], trade.get("price", 0), exchange,
+                            trade["size"], trade.get("price", 0), trade_type,
                         )
                     else:
                         try:
@@ -329,6 +329,7 @@ class TradingEngine:
                         "size": trade["size"],
                         "price": result.get("price", trade.get("price", 0)),
                         "exchange": exchange,
+                        "trade_type": trade_type,
                         "strategy": trade.get("strategy", "consensus"),
                         "regime": regime,
                     }
