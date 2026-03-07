@@ -1,9 +1,26 @@
-"""ATLAS Trading Engine – entry point."""
+"""ATLAS — Autonomous Trading & Liquidity Analysis System.
+
+Entry point.  Starts the autonomous trading engine loop.
+Defaults to PAPER_MODE=true unless explicitly set to 'false'.
+
+Usage:
+    python -m backend.main
+    # or
+    PAPER_MODE=false python -m backend.main   # LIVE trading (use with caution)
+
+Environment variables (see .env.local.example):
+    SUPABASE_URL, SUPABASE_KEY
+    KRAKEN_API_KEY, KRAKEN_SECRET
+    OKX_API_KEY, OKX_SECRET, OKX_PASSPHRASE
+    PAPER_MODE          (default: true)
+    LOOP_INTERVAL       (default: 5 seconds)
+    VOL_PAUSE           (default: 0.06 = 6 %)
+    MAX_DAILY_TRADES    (default: 20)
+    MAX_POS_PCT         (default: 0.03 = 3 %)
+"""
 
 import asyncio
-import json
 import logging
-import os
 import signal
 import sys
 
@@ -14,109 +31,46 @@ from backend.engine.trading_engine import TradingEngine
 # ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("atlas.log", mode="a"),
-    ],
+    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("atlas")
 
+
 # ---------------------------------------------------------------------------
-# Default configuration
+# Graceful shutdown
 # ---------------------------------------------------------------------------
-DEFAULT_CONFIG = {
-    "cycle_interval": 10.0,
-    "min_consensus": 2,
-    "min_confidence": 0.5,
-    "market_data": {
-        "symbols": ["BTC/USDT", "ETH/USDT"],
-        "poll_interval": 5.0,
-        "exchanges": {
-            # Add exchange credentials via environment variables
-            # "hyperliquid": {"api_key": "", "secret": ""},
-            # "kraken": {"api_key": "", "secret": ""},
-        },
-    },
-    "strategies": {
-        "momentum": {
-            "fast_period": 12,
-            "slow_period": 26,
-            "signal_period": 9,
-            "volume_confirm": True,
-            "min_volume_ratio": 1.5,
-        },
-        "mean_reversion": {
-            "bb_period": 20,
-            "bb_std": 2.0,
-            "zscore_entry": 2.0,
-            "zscore_exit": 0.5,
-            "lookback": 100,
-        },
-        "liquidation": {
-            "liq_threshold": 0.6,
-            "funding_extreme": 0.01,
-            "min_cluster_size": 1_000_000,
-        },
-        "whale_follow": {
-            "whale_threshold_usd": 500_000,
-            "flow_imbalance_threshold": 0.3,
-            "min_whale_count": 3,
-        },
-    },
-    "risk": {
-        "initial_capital": 10_000,
-        "max_position_pct": 0.02,
-        "max_portfolio_risk": 0.06,
-        "max_leverage": 3.0,
-        "max_drawdown_pct": 0.10,
-        "max_open_positions": 5,
-        "daily_loss_limit": 0.05,
-    },
-    "execution": {
-        "paper_mode": True,
-        "initial_capital": 10_000,
-        "exchanges": {},
-    },
-}
+engine: TradingEngine | None = None
 
 
-def load_config() -> dict:
-    """Load config from file or environment, falling back to defaults."""
-    config_path = os.environ.get("ATLAS_CONFIG", "config.json")
-    if os.path.exists(config_path):
-        with open(config_path) as f:
-            user_config = json.load(f)
-        # Merge user config over defaults
-        merged = {**DEFAULT_CONFIG, **user_config}
-        logger.info("Config loaded from %s", config_path)
-        return merged
-    logger.info("Using default configuration (paper mode)")
-    return DEFAULT_CONFIG
+def _handle_signal(signum, frame):
+    logger.info("Received signal %s — initiating shutdown", signum)
+    if engine is not None:
+        asyncio.ensure_future(engine.stop())
 
 
-async def run():
-    config = load_config()
-    engine = TradingEngine(config)
-
-    # Graceful shutdown
-    loop = asyncio.get_running_loop()
-
-    def _shutdown():
-        logger.info("Shutdown signal received")
-        asyncio.create_task(engine.stop())
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _shutdown)
+async def main():
+    global engine
 
     logger.info("=" * 60)
-    logger.info("  ATLAS – Autonomous Trading & Liquidity Analysis System")
-    logger.info("  Paper Mode: %s", config["execution"]["paper_mode"])
-    logger.info("  Symbols: %s", config["market_data"]["symbols"])
+    logger.info("  ATLAS — Autonomous Trading & Liquidity Analysis System")
     logger.info("=" * 60)
 
-    await engine.start()
+    engine = TradingEngine()
+
+    # Register graceful shutdown handlers
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    try:
+        await engine.run()
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt — shutting down")
+        await engine.stop()
+    except Exception as exc:
+        logger.critical("Fatal error: %s", exc, exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    asyncio.run(main())
