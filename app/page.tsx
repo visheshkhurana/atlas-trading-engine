@@ -1,412 +1,380 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
-import { Activity, TrendingUp, TrendingDown, Wallet, Shield, Zap, BarChart3, AlertTriangle, Clock, Send, RefreshCw } from 'lucide-react'
-import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
+import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer } from 'recharts'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 )
 
-const COLORS = ['#00ff88', '#00ccff', '#ff6644', '#ffaa00', '#aa66ff', '#ff44aa']
 const SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ARB/USDT', 'DOGE/USDT']
 
-/* ── Stat Card ───────────────────────────────────────────────── */
-function StatCard({ title, value, change, icon: Icon }: any) {
-  const isPositive = change >= 0
-  return (
-    <div className="glass-card p-4 hover:border-atlas-accent/30 transition-all">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-atlas-muted text-xs uppercase tracking-wider">{title}</span>
-        <Icon className="w-4 h-4 text-atlas-muted" />
-      </div>
-      <div className="text-2xl font-bold text-white">{value}</div>
-      {change !== undefined && (
-        <div className={`flex items-center gap-1 mt-1 text-sm ${isPositive ? 'text-atlas-profit' : 'text-atlas-loss'}`}>
-          {isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-          {isPositive ? '+' : ''}{change}%
-        </div>
-      )}
-    </div>
-  )
-}
-
-/* ── Strategy Card ───────────────────────────────────────────── */
-function StrategyCard({ name, pnl, winRate, sharpe, weight, trades }: any) {
-  return (
-    <div className="glass-card p-4 hover:border-atlas-accent/20 transition-all">
-      <div className="flex justify-between items-center mb-3">
-        <h3 className="font-semibold text-white">{name}</h3>
-        <span className="text-xs px-2 py-1 rounded-full bg-atlas-accent/10 text-atlas-accent">{(weight*100).toFixed(0)}%</span>
-      </div>
-      <div className="grid grid-cols-2 gap-2 text-sm">
-        <div><span className="text-atlas-muted">P&L:</span> <span className={`${pnl >= 0 ? 'text-atlas-profit' : 'text-atlas-loss'}`}>${pnl.toLocaleString()}</span></div>
-        <div><span className="text-atlas-muted">Win:</span> <span className="text-white">{(winRate*100).toFixed(1)}%</span></div>
-        <div><span className="text-atlas-muted">Sharpe:</span> <span className="text-white">{sharpe.toFixed(2)}</span></div>
-        <div><span className="text-atlas-muted">Trades:</span> <span className="text-white">{trades}</span></div>
-      </div>
-    </div>
-  )
-}
-
-/* ── Alert Item ──────────────────────────────────────────────── */
-function AlertItem({ level, message, timestamp }: any) {
-  const colors: any = { info: 'text-blue-400', warning: 'text-atlas-warning', critical: 'text-atlas-loss', error: 'text-atlas-loss' }
-  return (
-    <div className="flex items-start gap-3 p-3 border-b border-atlas-border/50 last:border-0">
-      <AlertTriangle className={`w-4 h-4 mt-0.5 ${colors[level] || 'text-blue-400'}`} />
-      <div className="flex-1">
-        <p className="text-sm text-atlas-text">{message}</p>
-        <p className="text-xs text-atlas-muted mt-1">{new Date(timestamp).toLocaleString()}</p>
-      </div>
-    </div>
-  )
-}
-
-/* ── Manual Order Form ───────────────────────────────────────── */
-function OrderForm({ onSubmit }: { onSubmit: (order: any) => void }) {
-  const [symbol, setSymbol] = useState('BTC/USDT')
-  const [side, setSide] = useState('buy')
-  const [size, setSize] = useState('')
+/* ══════════════════════════════════════════════════════════════ */
+export default function Dashboard() {
+  const [activeTab, setActiveTab] = useState('overview')
+  const [trades, setTrades] = useState<any[]>([])
+  const [alerts, setAlerts] = useState<any[]>([])
+  const [strategies, setStrategies] = useState<any[]>([])
+  const [portfolio, setPortfolio] = useState<any>(null)
+  const [currentTime, setCurrentTime] = useState(new Date())
+  const [orderSymbol, setOrderSymbol] = useState('BTC/USDT')
+  const [orderSide, setOrderSide] = useState('buy')
+  const [orderSize, setOrderSize] = useState('')
+  const [orderStatus, setOrderStatus] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  const handleSubmit = async (e: any) => {
-    e.preventDefault()
-    if (!size || parseFloat(size) <= 0) return
-    setSubmitting(true)
-    await onSubmit({ symbol, side, size: parseFloat(size) })
-    setSize('')
-    setSubmitting(false)
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="glass-card p-5">
-      <h2 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider mb-4">Place Order</h2>
-      <div className="space-y-4">
-        <div>
-          <label className="text-xs text-atlas-muted mb-1 block">Symbol</label>
-          <select value={symbol} onChange={e => setSymbol(e.target.value)}
-            className="w-full bg-atlas-card border border-atlas-border rounded px-3 py-2 text-white text-sm focus:border-atlas-accent outline-none">
-            {SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs text-atlas-muted mb-1 block">Side</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={() => setSide('buy')}
-              className={`py-2 rounded text-sm font-semibold transition-all ${side === 'buy' ? 'bg-atlas-profit text-black' : 'bg-atlas-card border border-atlas-border text-atlas-muted'}`}>
-              LONG / BUY
-            </button>
-            <button type="button" onClick={() => setSide('sell')}
-              className={`py-2 rounded text-sm font-semibold transition-all ${side === 'sell' ? 'bg-atlas-loss text-white' : 'bg-atlas-card border border-atlas-border text-atlas-muted'}`}>
-              SHORT / SELL
-            </button>
-          </div>
-        </div>
-        <div>
-          <label className="text-xs text-atlas-muted mb-1 block">Size (units)</label>
-          <input type="number" step="any" value={size} onChange={e => setSize(e.target.value)} placeholder="0.001"
-            className="w-full bg-atlas-card border border-atlas-border rounded px-3 py-2 text-white text-sm focus:border-atlas-accent outline-none" />
-        </div>
-        <div className="text-xs text-atlas-muted">
-          Route: {side === 'buy' ? 'OKX Spot' : 'OKX Perp'}
-        </div>
-        <button type="submit" disabled={submitting || !size}
-          className="w-full py-2.5 rounded bg-atlas-accent text-black font-semibold text-sm hover:bg-atlas-accent/90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all">
-          <Send className="w-4 h-4" />
-          {submitting ? 'Placing...' : 'Place Order'}
-        </button>
-      </div>
-    </form>
-  )
-}
-
-/* ══════════════════════════════════════════════════════════════
-   MAIN DASHBOARD
-   ══════════════════════════════════════════════════════════════ */
-export default function Dashboard() {
-  const [portfolio, setPortfolio] = useState<any>(null)
-  const [strategies, setStrategies] = useState<any[]>([])
-  const [alerts, setAlerts] = useState<any[]>([])
-  const [trades, setTrades] = useState<any[]>([])
-  const [activeTab, setActiveTab] = useState('dashboard')
-  const [currentTime, setCurrentTime] = useState(new Date())
-  const [orderStatus, setOrderStatus] = useState('')
-
-  // Clock
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
-    return () => clearInterval(timer)
+    const t = setInterval(() => setCurrentTime(new Date()), 1000)
+    return () => clearInterval(t)
   }, [])
 
-  // Load data
   const loadData = useCallback(async () => {
     const { data: p } = await supabase.from('portfolio_snapshots').select('*').order('timestamp', { ascending: false }).limit(1)
     if (p && p.length) setPortfolio(p[0])
-
     const { data: s } = await supabase.from('strategy_performance').select('*').order('total_pnl', { ascending: false })
     if (s) setStrategies(s)
-
     const { data: a } = await supabase.from('system_alerts').select('*').order('timestamp', { ascending: false }).limit(10)
     if (a) setAlerts(a)
-
     const { data: t } = await supabase.from('trades').select('*').order('timestamp', { ascending: false }).limit(50)
     if (t) setTrades(t)
   }, [])
 
   useEffect(() => {
     loadData()
-    // Realtime subscriptions
-    const sub = supabase.channel('realtime-all')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'portfolio_snapshots' }, (payload: any) => {
-        setPortfolio(payload.new)
+    const sub = supabase.channel('rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, (p: any) => {
+        if (p.eventType === 'INSERT') setTrades(prev => [p.new, ...prev].slice(0, 50))
       })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'system_alerts' }, (payload: any) => {
-        setAlerts(prev => [payload.new, ...prev].slice(0, 10))
-      })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'trades' }, (payload: any) => {
-        setTrades(prev => [payload.new, ...prev].slice(0, 50))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'system_alerts' }, (p: any) => {
+        setAlerts(prev => [p.new, ...prev].slice(0, 10))
       })
       .subscribe()
     return () => { supabase.removeChannel(sub) }
   }, [loadData])
 
-  // Place manual order -> insert into Supabase trades table
-  const handlePlaceOrder = async (order: any) => {
-    try {
-      const tradeRecord = {
-        symbol: order.symbol,
-        side: order.side,
-        size: order.size,
-        price: 0,
-        exchange: 'okx',
-        strategy: 'manual',
-        regime: 'manual',
-        timestamp: new Date().toISOString(),
-      }
-      const { error } = await supabase.from('trades').insert(tradeRecord)
-      if (error) {
-        setOrderStatus('Error: ' + error.message)
-      } else {
-        setOrderStatus(`Order placed: ${order.side.toUpperCase()} ${order.size} ${order.symbol}`)
-        loadData()
-      }
-      setTimeout(() => setOrderStatus(''), 4000)
-    } catch (err: any) {
-      setOrderStatus('Error: ' + err.message)
-    }
+  const placeOrder = async () => {
+    if (!orderSize || parseFloat(orderSize) <= 0 || submitting) return
+    setSubmitting(true)
+    const { error } = await supabase.from('trades').insert({
+      symbol: orderSymbol, side: orderSide, size: parseFloat(orderSize),
+      price: 0, exchange: 'okx', strategy: 'manual', regime: 'manual',
+      timestamp: new Date().toISOString(),
+    })
+    if (error) setOrderStatus('Error: ' + error.message)
+    else { setOrderStatus(orderSide.toUpperCase() + ' ' + orderSize + ' ' + orderSymbol + ' placed'); setOrderSize(''); loadData() }
+    setSubmitting(false)
+    setTimeout(() => setOrderStatus(''), 4000)
   }
 
-  const chartData = Array.from({ length: 30 }, (_, i) => ({
-    day: i + 1,
-    value: 95000 + Math.random() * 10000 + i * 200,
-  }))
-
-  const tabs = ['dashboard', 'trades', 'strategies', 'risk', 'settings']
+  const chartData = Array.from({ length: 30 }, (_, i) => ({ d: i + 1, v: 95000 + Math.random() * 8000 + i * 300 }))
+  const tabs = ['overview', 'trade', 'positions', 'strategies', 'risk']
+  const totalValue = portfolio?.total_value || 100000
 
   return (
-    <div className="min-h-screen">
-      {/* ── Top Bar ────────────────────────────────────────────── */}
-      <header className="border-b border-atlas-border bg-atlas-bg/90 backdrop-blur-xl sticky top-0 z-50">
-        <div className="flex items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-atlas-accent/20 flex items-center justify-center">
-              <Zap className="w-5 h-5 text-atlas-accent" />
-            </div>
-            <h1 className="text-lg font-bold text-white tracking-tight">ATLAS</h1>
-            <span className="text-xs text-atlas-muted px-2 py-0.5 rounded bg-atlas-card border border-atlas-border">v2.0</span>
-          </div>
+    <div className="min-h-screen" style={{ background: 'var(--bg-primary)' }}>
+
+      {/* ── HEADER ─────────────────────────────────────────────── */}
+      <header style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }} className="sticky top-0 z-50">
+        <div className="flex items-center justify-between px-5 h-14">
           <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2 text-xs text-atlas-muted">
-              <div className="w-2 h-2 rounded-full bg-atlas-accent animate-pulse" />
-              <span>OKX Connected</span>
+            <div className="flex items-center gap-2">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4" fill="#fff"/><path d="M6 8h4v4H6zM10 12h4v4h-4zM14 8h4v4h-4z" fill="#121212"/></svg>
+              <span className="text-base font-semibold tracking-tight">ATLAS</span>
             </div>
-            <div className="flex items-center gap-2 text-xs text-atlas-muted">
-              <Clock className="w-3 h-3" />
-              <span>{currentTime.toUTCString().slice(17, 25)} UTC</span>
+            <nav className="flex items-center">
+              {tabs.map(tab => (
+                <button key={tab} onClick={() => setActiveTab(tab)}
+                  className={`okx-tab ${activeTab === tab ? 'okx-tab-active' : ''}`}>
+                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                </button>
+              ))}
+            </nav>
+          </div>
+          <div className="flex items-center gap-5">
+            <div className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
+              <div className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--green)' }} />
+              OKX
             </div>
+            <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+              {currentTime.toUTCString().slice(17, 25)} UTC
+            </div>
+            <div className="okx-badge okx-badge-yellow text-xs">Paper</div>
           </div>
         </div>
-        <nav className="flex gap-1 px-6 pb-0">
-          {tabs.map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-sm capitalize transition-all border-b-2 ${
-                activeTab === tab ? 'border-atlas-accent text-atlas-accent' : 'border-transparent text-atlas-muted hover:text-white'
-              }`}>
-              {tab}
-            </button>
-          ))}
-        </nav>
       </header>
 
-      <main className="p-6 max-w-[1800px] mx-auto">
+      <main className="max-w-[1600px] mx-auto">
 
-        {/* ══ DASHBOARD TAB ══════════════════════════════════════ */}
-        {activeTab === 'dashboard' && (
-          <>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
-              <StatCard title="Portfolio Value" value={`$${portfolio?.total_value?.toLocaleString() || '100,000'}`} change={0.45} icon={Wallet} />
-              <StatCard title="Unrealized P&L" value={`$${portfolio?.unrealized_pnl?.toLocaleString() || '1,250'}`} change={1.25} icon={TrendingUp} />
-              <StatCard title="Today's P&L" value={`$${portfolio?.realized_pnl_today?.toLocaleString() || '450'}`} change={0.45} icon={BarChart3} />
-              <StatCard title="Win Rate" value={`${((portfolio?.win_rate || 0.62) * 100).toFixed(1)}%`} change={undefined} icon={Activity} />
-              <StatCard title="Sharpe Ratio" value={(portfolio?.sharpe_ratio || 1.8).toFixed(2)} change={undefined} icon={Shield} />
-              <StatCard title="Max Drawdown" value={`${((portfolio?.max_drawdown || 0.05) * 100).toFixed(1)}%`} change={undefined} icon={AlertTriangle} />
+        {/* ══ OVERVIEW ═══════════════════════════════════════════ */}
+        {activeTab === 'overview' && (
+          <div className="p-5 space-y-4">
+            {/* Balance Row */}
+            <div className="okx-card p-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs mb-1" style={{ color: 'var(--text-tertiary)' }}>Total Balance</div>
+                  <div className="text-3xl font-semibold">${totalValue.toLocaleString()}</div>
+                  <div className="flex items-center gap-4 mt-2 text-sm">
+                    <span style={{ color: 'var(--text-secondary)' }}>Today&apos;s PnL</span>
+                    <span className="green-text">+$450.00 (+0.45%)</span>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button className="okx-btn okx-btn-green">Deposit</button>
+                  <button className="okx-btn okx-btn-ghost">Withdraw</button>
+                </div>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-              <div className="lg:col-span-2 glass-card p-4">
-                <h2 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider mb-4">Portfolio Value (30d)</h2>
-                <ResponsiveContainer width="100%" height={300}>
+            {/* Stats Grid */}
+            <div className="grid grid-cols-5 gap-4">
+              {[
+                { label: 'Unrealized PnL', value: '+$1,250.00', color: 'green-text' },
+                { label: 'Win Rate', value: '62.0%', color: '' },
+                { label: 'Sharpe Ratio', value: '1.80', color: '' },
+                { label: 'Max Drawdown', value: '5.0%', color: '' },
+                { label: 'Active Trades', value: String(trades.length), color: '' },
+              ].map(s => (
+                <div key={s.label} className="okx-card p-4">
+                  <div className="text-xs mb-1.5" style={{ color: 'var(--text-tertiary)' }}>{s.label}</div>
+                  <div className={`text-lg font-medium ${s.color}`}>{s.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Chart + Allocation */}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="col-span-2 okx-card p-4">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-sm font-medium">Portfolio Value</span>
+                  <div className="flex gap-2">
+                    {['1D', '1W', '1M', '3M'].map(p => (
+                      <button key={p} className="text-xs px-2 py-1 rounded" style={{ color: p === '1M' ? 'var(--text-primary)' : 'var(--text-tertiary)', background: p === '1M' ? 'var(--bg-tertiary)' : 'transparent' }}>{p}</button>
+                    ))}
+                  </div>
+                </div>
+                <ResponsiveContainer width="100%" height={260}>
                   <AreaChart data={chartData}>
                     <defs>
-                      <linearGradient id="green" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#00ff88" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#00ff88" stopOpacity={0}/>
+                      <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#00b853" stopOpacity={0.15}/>
+                        <stop offset="100%" stopColor="#00b853" stopOpacity={0}/>
                       </linearGradient>
                     </defs>
-                    <XAxis dataKey="day" stroke="#6b7280" fontSize={10} />
-                    <YAxis stroke="#6b7280" fontSize={10} tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
-                    <Area type="monotone" dataKey="value" stroke="#00ff88" fill="url(#green)" strokeWidth={2} />
+                    <XAxis dataKey="d" stroke="#333" fontSize={11} tickLine={false} axisLine={false} />
+                    <YAxis stroke="#333" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v: number) => `${(v/1000).toFixed(0)}k`} width={40} />
+                    <Area type="monotone" dataKey="v" stroke="#00b853" fill="url(#g)" strokeWidth={1.5} dot={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
-              <div className="glass-card p-4">
-                <h2 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider mb-4">Exchange Allocation</h2>
-                <ResponsiveContainer width="100%" height={200}>
-                  <PieChart>
-                    <Pie data={[{ name: 'OKX Spot', value: 60000 }, { name: 'OKX Perp', value: 40000 }]}
-                      cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value">
-                      <Cell fill="#00ff88" /><Cell fill="#00ccff" />
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="space-y-2 mt-2">
-                  {[{ name: 'OKX Spot (LONG)', value: 60000, color: '#00ff88' }, { name: 'OKX Perp (SHORT)', value: 40000, color: '#00ccff' }].map(item => (
-                    <div key={item.name} className="flex justify-between items-center text-sm">
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }} />
-                        <span className="text-atlas-text">{item.name}</span>
+              <div className="okx-card p-4">
+                <div className="text-sm font-medium mb-4">Assets</div>
+                <div className="space-y-3">
+                  {[
+                    { name: 'OKX Spot', value: 60000, pct: 60 },
+                    { name: 'OKX Perp', value: 40000, pct: 40 },
+                  ].map(a => (
+                    <div key={a.name}>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span style={{ color: 'var(--text-secondary)' }}>{a.name}</span>
+                        <span>${a.value.toLocaleString()}</span>
                       </div>
-                      <span className="text-white font-medium">${item.value.toLocaleString()}</span>
+                      <div className="w-full h-1.5 rounded-full" style={{ background: 'var(--bg-tertiary)' }}>
+                        <div className="h-full rounded-full" style={{ width: a.pct + '%', background: a.name.includes('Spot') ? 'var(--green)' : 'var(--blue)' }} />
+                      </div>
                     </div>
                   ))}
                 </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2">
-                <h2 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider mb-4">Active Strategies</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {strategies.length > 0 ? strategies.map(s => (
-                    <StrategyCard key={s.id} name={s.strategy_name} pnl={s.total_pnl} winRate={s.win_rate} sharpe={s.sharpe_ratio} weight={s.current_weight} trades={s.total_trades} />
-                  )) : (
-                    <>
-                      <StrategyCard name="Momentum" pnl={12500} winRate={0.628} sharpe={2.1} weight={0.25} trades={456} />
-                      <StrategyCard name="Order Flow" pnl={8900} winRate={0.71} sharpe={1.9} weight={0.2} trades={234} />
-                      <StrategyCard name="Mean Reversion" pnl={6200} winRate={0.58} sharpe={1.5} weight={0.2} trades={312} />
-                      <StrategyCard name="Whale Follow" pnl={4100} winRate={0.65} sharpe={1.7} weight={0.15} trades={89} />
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="glass-card p-4 max-h-[500px] overflow-y-auto">
-                <h2 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider mb-4">System Alerts</h2>
-                {alerts.length === 0 && <p className="text-atlas-muted text-sm">No alerts yet</p>}
-                {alerts.map((a, i) => <AlertItem key={i} level={a.level} message={a.message} timestamp={a.timestamp} />)}
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* ══ TRADES TAB ═════════════════════════════════════════ */}
-        {activeTab === 'trades' && (
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            {/* Order Form */}
-            <div className="lg:col-span-1">
-              <OrderForm onSubmit={handlePlaceOrder} />
-              {orderStatus && (
-                <div className={`mt-3 p-3 rounded text-sm ${orderStatus.startsWith('Error') ? 'bg-red-500/10 text-atlas-loss border border-red-500/20' : 'bg-atlas-accent/10 text-atlas-accent border border-atlas-accent/20'}`}>
-                  {orderStatus}
-                </div>
-              )}
-            </div>
-
-            {/* Trade History */}
-            <div className="lg:col-span-3">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider">Trade History</h2>
-                <button onClick={loadData} className="flex items-center gap-1 text-xs text-atlas-muted hover:text-atlas-accent transition-all">
-                  <RefreshCw className="w-3 h-3" /> Refresh
-                </button>
-              </div>
-              <div className="glass-card overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-atlas-border">
-                      <th className="text-left p-3 text-atlas-muted text-xs uppercase">Time</th>
-                      <th className="text-left p-3 text-atlas-muted text-xs uppercase">Symbol</th>
-                      <th className="text-left p-3 text-atlas-muted text-xs uppercase">Side</th>
-                      <th className="text-right p-3 text-atlas-muted text-xs uppercase">Size</th>
-                      <th className="text-right p-3 text-atlas-muted text-xs uppercase">Price</th>
-                      <th className="text-left p-3 text-atlas-muted text-xs uppercase">Exchange</th>
-                      <th className="text-left p-3 text-atlas-muted text-xs uppercase">Strategy</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trades.length === 0 && (
-                      <tr><td colSpan={7} className="p-8 text-center text-atlas-muted">No trades yet. Place your first order!</td></tr>
-                    )}
-                    {trades.map((t, i) => (
-                      <tr key={i} className="border-b border-atlas-border/30 hover:bg-white/[0.02] transition-all">
-                        <td className="p-3 text-atlas-muted text-xs">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '-'}</td>
-                        <td className="p-3 text-white font-medium">{t.symbol}</td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                            t.side === 'buy' || t.side === 'long' ? 'bg-atlas-profit/10 text-atlas-profit' : 'bg-atlas-loss/10 text-atlas-loss'
-                          }`}>
-                            {t.side?.toUpperCase()}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right text-white">{t.size}</td>
-                        <td className="p-3 text-right text-white">{t.price ? `$${parseFloat(t.price).toLocaleString()}` : '-'}</td>
-                        <td className="p-3 text-atlas-muted">{t.exchange?.toUpperCase()}</td>
-                        <td className="p-3"><span className="text-xs px-2 py-0.5 rounded bg-atlas-card border border-atlas-border text-atlas-muted">{t.strategy || '-'}</span></td>
-                      </tr>
+                <div className="mt-6">
+                  <div className="text-sm font-medium mb-3">Recent Alerts</div>
+                  <div className="space-y-2">
+                    {(alerts.length > 0 ? alerts.slice(0, 4) : [
+                      { level: 'warning', message: 'Portfolio drawdown approaching threshold', timestamp: new Date().toISOString() }
+                    ]).map((a, i) => (
+                      <div key={i} className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        <div className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0" style={{ background: a.level === 'warning' ? 'var(--yellow)' : a.level === 'error' ? 'var(--red)' : 'var(--blue)' }} />
+                        <div>
+                          <div>{a.message}</div>
+                          <div style={{ color: 'var(--text-tertiary)' }}>{new Date(a.timestamp).toLocaleTimeString()}</div>
+                        </div>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                </div>
               </div>
+            </div>
+
+            {/* Recent Trades */}
+            <div className="okx-card">
+              <div className="flex items-center justify-between p-4 pb-0">
+                <span className="text-sm font-medium">Recent Trades</span>
+                <button onClick={() => setActiveTab('trade')} className="text-xs" style={{ color: 'var(--text-tertiary)' }}>View All →</button>
+              </div>
+              <table className="w-full okx-table mt-2">
+                <thead><tr>
+                  <th>Time</th><th>Pair</th><th>Side</th><th className="text-right">Amount</th><th className="text-right">Price</th><th>Exchange</th><th>Strategy</th>
+                </tr></thead>
+                <tbody>
+                  {trades.length === 0 && <tr><td colSpan={7} className="text-center py-8" style={{ color: 'var(--text-tertiary)' }}>No trades yet</td></tr>}
+                  {trades.slice(0, 5).map((t, i) => (
+                    <tr key={i}>
+                      <td style={{ color: 'var(--text-tertiary)' }} className="text-xs">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '-'}</td>
+                      <td className="font-medium">{t.symbol}</td>
+                      <td><span className={`okx-badge ${t.side === 'buy' || t.side === 'long' ? 'okx-badge-green' : 'okx-badge-red'}`}>{t.side?.toUpperCase()}</span></td>
+                      <td className="text-right">{t.size}</td>
+                      <td className="text-right">{t.price ? '$' + parseFloat(t.price).toLocaleString() : '-'}</td>
+                      <td style={{ color: 'var(--text-secondary)' }}>{t.exchange?.toUpperCase()}</td>
+                      <td style={{ color: 'var(--text-tertiary)' }}>{t.strategy}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
 
-        {/* ══ STRATEGIES TAB ═════════════════════════════════════ */}
-        {activeTab === 'strategies' && (
-          <div>
-            <h2 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider mb-4">Strategy Performance</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-              {strategies.length > 0 ? strategies.map(s => (
-                <StrategyCard key={s.id} name={s.strategy_name} pnl={s.total_pnl} winRate={s.win_rate} sharpe={s.sharpe_ratio} weight={s.current_weight} trades={s.total_trades} />
-              )) : (
-                <>
-                  <StrategyCard name="Momentum" pnl={12500} winRate={0.628} sharpe={2.1} weight={0.25} trades={456} />
-                  <StrategyCard name="Order Flow Imbalance" pnl={8900} winRate={0.71} sharpe={1.9} weight={0.2} trades={234} />
-                  <StrategyCard name="Mean Reversion" pnl={6200} winRate={0.58} sharpe={1.5} weight={0.2} trades={312} />
-                  <StrategyCard name="Liquidation Cluster" pnl={5800} winRate={0.64} sharpe={1.6} weight={0.15} trades={178} />
-                  <StrategyCard name="Whale Follow" pnl={4100} winRate={0.65} sharpe={1.7} weight={0.1} trades={89} />
-                  <StrategyCard name="AI Consensus" pnl={15200} winRate={0.72} sharpe={2.4} weight={0.1} trades={567} />
-                </>
+        {/* ══ TRADE ══════════════════════════════════════════════ */}
+        {activeTab === 'trade' && (
+          <div className="flex" style={{ height: 'calc(100vh - 56px)' }}>
+            {/* Order Panel */}
+            <div className="w-80 flex-shrink-0 p-4 space-y-4" style={{ borderRight: '1px solid var(--border)' }}>
+              <div className="flex rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+                <button onClick={() => setOrderSide('buy')}
+                  className={`flex-1 py-2.5 text-sm font-medium transition-all ${orderSide === 'buy' ? 'text-white' : ''}`}
+                  style={{ background: orderSide === 'buy' ? 'var(--green)' : 'var(--bg-tertiary)', color: orderSide === 'buy' ? '#fff' : 'var(--text-tertiary)' }}>
+                  Buy / Long
+                </button>
+                <button onClick={() => setOrderSide('sell')}
+                  className={`flex-1 py-2.5 text-sm font-medium transition-all`}
+                  style={{ background: orderSide === 'sell' ? 'var(--red)' : 'var(--bg-tertiary)', color: orderSide === 'sell' ? '#fff' : 'var(--text-tertiary)' }}>
+                  Sell / Short
+                </button>
+              </div>
+
+              <div>
+                <label className="text-xs block mb-1.5" style={{ color: 'var(--text-tertiary)' }}>Pair</label>
+                <select value={orderSymbol} onChange={e => setOrderSymbol(e.target.value)} className="okx-input">
+                  {SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs block mb-1.5" style={{ color: 'var(--text-tertiary)' }}>Amount</label>
+                <input type="number" step="any" value={orderSize} onChange={e => setOrderSize(e.target.value)}
+                  placeholder="0.00" className="okx-input" />
+              </div>
+
+              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                Route: {orderSide === 'buy' ? 'OKX Spot' : 'OKX Perpetual'}
+              </div>
+
+              <button onClick={placeOrder} disabled={submitting || !orderSize}
+                className={`w-full py-3 rounded text-sm font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed`}
+                style={{ background: orderSide === 'buy' ? 'var(--green)' : 'var(--red)', color: '#fff' }}>
+                {submitting ? 'Placing...' : (orderSide === 'buy' ? 'Buy / Long' : 'Sell / Short') + ' ' + orderSymbol}
+              </button>
+
+              {orderStatus && (
+                <div className={`text-xs p-2.5 rounded ${orderStatus.startsWith('Error') ? 'okx-badge-red' : 'okx-badge-green'}`}>
+                  {orderStatus}
+                </div>
               )}
+
+              <div style={{ borderTop: '1px solid var(--border)' }} className="pt-4">
+                <div className="text-xs font-medium mb-3" style={{ color: 'var(--text-secondary)' }}>Risk Limits</div>
+                <div className="space-y-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                  <div className="flex justify-between"><span>Max per trade</span><span>2%</span></div>
+                  <div className="flex justify-between"><span>Max leverage</span><span>3x</span></div>
+                  <div className="flex justify-between"><span>Daily limit</span><span>20 trades</span></div>
+                  <div className="flex justify-between"><span>Vol pause</span><span>&gt;6%</span></div>
+                </div>
+              </div>
             </div>
-            <div className="glass-card p-5">
-              <h3 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider mb-3">Engine Pipeline</h3>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-atlas-text">
-                {['MarketData', 'Strategies', 'RegimeDetector', 'DecisionAgent', 'PortfolioAgent', 'PositionScaler', 'RiskManager', 'OKX Execution', 'Supabase', 'Dashboard'].map((step, i) => (
-                  <span key={step} className="flex items-center gap-2">
-                    <span className="px-3 py-1.5 rounded bg-atlas-accent/10 border border-atlas-accent/20 text-atlas-accent">{step}</span>
-                    {i < 9 && <span className="text-atlas-muted">→</span>}
+
+            {/* Trade History */}
+            <div className="flex-1 overflow-auto">
+              <div className="flex items-center justify-between p-4 pb-2">
+                <span className="text-sm font-medium">Trade History</span>
+                <button onClick={loadData} className="text-xs" style={{ color: 'var(--text-tertiary)' }}>↻ Refresh</button>
+              </div>
+              <table className="w-full okx-table">
+                <thead><tr>
+                  <th>Time</th><th>Pair</th><th>Side</th><th className="text-right">Amount</th><th className="text-right">Price</th><th>Exchange</th><th>Strategy</th>
+                </tr></thead>
+                <tbody>
+                  {trades.length === 0 && <tr><td colSpan={7} className="text-center py-16" style={{ color: 'var(--text-tertiary)' }}>No trades yet. Place your first order.</td></tr>}
+                  {trades.map((t, i) => (
+                    <tr key={i}>
+                      <td style={{ color: 'var(--text-tertiary)' }} className="text-xs">{t.timestamp ? new Date(t.timestamp).toLocaleString() : '-'}</td>
+                      <td className="font-medium">{t.symbol}</td>
+                      <td><span className={`okx-badge ${t.side === 'buy' || t.side === 'long' ? 'okx-badge-green' : 'okx-badge-red'}`}>{t.side?.toUpperCase()}</span></td>
+                      <td className="text-right">{t.size}</td>
+                      <td className="text-right">{t.price ? '$' + parseFloat(t.price).toLocaleString() : '-'}</td>
+                      <td style={{ color: 'var(--text-secondary)' }}>{t.exchange?.toUpperCase()}</td>
+                      <td style={{ color: 'var(--text-tertiary)' }}>{t.strategy}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ══ POSITIONS ══════════════════════════════════════════ */}
+        {activeTab === 'positions' && (
+          <div className="p-5">
+            <div className="okx-card">
+              <div className="p-4 pb-2 flex items-center justify-between">
+                <span className="text-sm font-medium">Open Positions</span>
+                <button onClick={loadData} className="text-xs" style={{ color: 'var(--text-tertiary)' }}>↻ Refresh</button>
+              </div>
+              <table className="w-full okx-table">
+                <thead><tr>
+                  <th>Pair</th><th>Side</th><th className="text-right">Size</th><th className="text-right">Entry Price</th><th className="text-right">Mark Price</th><th className="text-right">PnL</th><th className="text-right">Leverage</th><th>Exchange</th>
+                </tr></thead>
+                <tbody>
+                  <tr><td colSpan={8} className="text-center py-16" style={{ color: 'var(--text-tertiary)' }}>No open positions. Positions will appear when the engine executes trades.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ══ STRATEGIES ═════════════════════════════════════════ */}
+        {activeTab === 'strategies' && (
+          <div className="p-5 space-y-4">
+            <div className="grid grid-cols-3 gap-4">
+              {(strategies.length > 0 ? strategies : [
+                { strategy_name: 'Momentum', total_pnl: 12500, win_rate: 0.628, sharpe_ratio: 2.1, current_weight: 0.25, total_trades: 456 },
+                { strategy_name: 'Order Flow', total_pnl: 8900, win_rate: 0.71, sharpe_ratio: 1.9, current_weight: 0.2, total_trades: 234 },
+                { strategy_name: 'Mean Reversion', total_pnl: 6200, win_rate: 0.58, sharpe_ratio: 1.5, current_weight: 0.2, total_trades: 312 },
+                { strategy_name: 'Liquidation', total_pnl: 5800, win_rate: 0.64, sharpe_ratio: 1.6, current_weight: 0.15, total_trades: 178 },
+                { strategy_name: 'Whale Follow', total_pnl: 4100, win_rate: 0.65, sharpe_ratio: 1.7, current_weight: 0.1, total_trades: 89 },
+                { strategy_name: 'AI Consensus', total_pnl: 15200, win_rate: 0.72, sharpe_ratio: 2.4, current_weight: 0.1, total_trades: 567 },
+              ]).map((s: any, i) => (
+                <div key={i} className="okx-card p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="font-medium">{s.strategy_name}</span>
+                    <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>{(s.current_weight * 100).toFixed(0)}%</span>
+                  </div>
+                  <div className={`text-xl font-semibold mb-3 ${s.total_pnl >= 0 ? 'green-text' : 'red-text'}`}>${s.total_pnl.toLocaleString()}</div>
+                  <div className="grid grid-cols-3 gap-3 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    <div><div>Win Rate</div><div className="text-white mt-0.5">{(s.win_rate * 100).toFixed(1)}%</div></div>
+                    <div><div>Sharpe</div><div className="text-white mt-0.5">{s.sharpe_ratio.toFixed(2)}</div></div>
+                    <div><div>Trades</div><div className="text-white mt-0.5">{s.total_trades}</div></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="okx-card p-4">
+              <div className="text-sm font-medium mb-3">Engine Pipeline</div>
+              <div className="flex items-center gap-1 text-xs flex-wrap">
+                {['Market Data', 'Strategies', 'Regime', 'Consensus', 'Portfolio', 'Position Scaler', 'Risk', 'OKX', 'Supabase', 'Dashboard'].map((s, i) => (
+                  <span key={s} className="flex items-center gap-1">
+                    <span className="px-2.5 py-1 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>{s}</span>
+                    {i < 9 && <span style={{ color: 'var(--text-tertiary)' }}>→</span>}
                   </span>
                 ))}
               </div>
@@ -414,57 +382,29 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ══ RISK TAB ═══════════════════════════════════════════ */}
+        {/* ══ RISK ═══════════════════════════════════════════════ */}
         {activeTab === 'risk' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[
-              { label: 'Max Risk / Trade', value: '2%', status: 'ok' },
-              { label: 'Max Portfolio Exposure', value: '20%', status: 'ok' },
-              { label: 'Max Leverage', value: '3x', status: 'ok' },
-              { label: 'Max Drawdown Limit', value: '10%', status: 'ok' },
-              { label: 'Daily Loss Limit', value: '5%', status: 'ok' },
-              { label: 'Max Trades / Day', value: '20', status: 'ok' },
-              { label: 'Volatility Pause', value: '> 6% → pause', status: 'ok' },
-              { label: 'Position Size Cap', value: '3% portfolio', status: 'ok' },
-              { label: 'Paper Mode', value: 'ACTIVE', status: 'warning' },
-            ].map(item => (
-              <div key={item.label} className="glass-card p-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-atlas-muted text-sm">{item.label}</span>
-                  <span className={`w-2 h-2 rounded-full ${item.status === 'ok' ? 'bg-atlas-profit' : 'bg-atlas-warning'}`} />
+          <div className="p-5">
+            <div className="grid grid-cols-3 gap-4">
+              {[
+                { label: 'Max Risk / Trade', value: '2%', ok: true },
+                { label: 'Max Exposure', value: '20%', ok: true },
+                { label: 'Max Leverage', value: '3x', ok: true },
+                { label: 'Max Drawdown', value: '10%', ok: true },
+                { label: 'Daily Loss Limit', value: '5%', ok: true },
+                { label: 'Max Trades / Day', value: '20', ok: true },
+                { label: 'Volatility Pause', value: '> 6%', ok: true },
+                { label: 'Position Cap', value: '3% of portfolio', ok: true },
+                { label: 'Engine Mode', value: 'Paper Trading', ok: false },
+              ].map(r => (
+                <div key={r.label} className="okx-card p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{r.label}</span>
+                    <div className="w-2 h-2 rounded-full" style={{ background: r.ok ? 'var(--green)' : 'var(--yellow)' }} />
+                  </div>
+                  <div className="text-lg font-medium">{r.value}</div>
                 </div>
-                <div className="text-xl font-bold text-white mt-2">{item.value}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* ══ SETTINGS TAB ═══════════════════════════════════════ */}
-        {activeTab === 'settings' && (
-          <div className="max-w-2xl space-y-6">
-            <div className="glass-card p-5">
-              <h2 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider mb-4">Exchange Connection</h2>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center p-3 rounded bg-atlas-card border border-atlas-border">
-                  <span className="text-white">OKX</span>
-                  <span className="flex items-center gap-2 text-xs text-atlas-profit"><div className="w-2 h-2 rounded-full bg-atlas-profit" /> Connected</span>
-                </div>
-                <div className="flex justify-between items-center p-3 rounded bg-atlas-card border border-atlas-border">
-                  <span className="text-white">Kraken</span>
-                  <span className="flex items-center gap-2 text-xs text-atlas-muted"><div className="w-2 h-2 rounded-full bg-gray-500" /> Not configured</span>
-                </div>
-              </div>
-            </div>
-            <div className="glass-card p-5">
-              <h2 className="text-sm font-semibold text-atlas-muted uppercase tracking-wider mb-4">System</h2>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-atlas-muted">Engine Mode</span><span className="text-atlas-warning">Paper Trading</span></div>
-                <div className="flex justify-between"><span className="text-atlas-muted">Loop Interval</span><span className="text-white">5s</span></div>
-                <div className="flex justify-between"><span className="text-atlas-muted">Symbols</span><span className="text-white">BTC, ETH, SOL, ARB, DOGE</span></div>
-                <div className="flex justify-between"><span className="text-atlas-muted">Primary Exchange</span><span className="text-atlas-accent">OKX</span></div>
-                <div className="flex justify-between"><span className="text-atlas-muted">Supabase</span><span className="text-atlas-profit">Connected</span></div>
-                <div className="flex justify-between"><span className="text-atlas-muted">Dashboard</span><span className="text-atlas-profit">Live</span></div>
-              </div>
+              ))}
             </div>
           </div>
         )}
