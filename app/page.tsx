@@ -13,16 +13,20 @@ const SYMBOLS = ['BTC/USDT','ETH/USDT','SOL/USDT','ARB/USDT','DOGE/USDT','AVAX/U
 function LiveTicker() {
   const [prices, setPrices] = useState<Record<string,{price:number;change:number}>>({})
   useEffect(() => {
-    const go = () => {
-      setPrices({
-        'BTC': { price: 98450+Math.random()*400-200, change: 1.2+Math.random()*0.5-0.25 },
-        'ETH': { price: 3780+Math.random()*40-20, change: 0.8+Math.random()*0.5-0.25 },
-        'SOL': { price: 178+Math.random()*10-5, change: 2.1+Math.random()*1-0.5 },
-        'ARB': { price: 1.18+Math.random()*0.05-0.025, change: -0.5+Math.random()*2-1 },
-        'DOGE': { price: 0.165+Math.random()*0.005-0.0025, change: 0.3+Math.random()*0.8-0.4 },
-      })
+    const go = async () => {
+      try {
+        const res = await fetch('/api/prices')
+        const data = await res.json()
+        if (data.prices) setPrices(Object.fromEntries(Object.entries(data.prices).map(([k,v]:any)=>([k,{price:v.price,change:v.change}]))))
+      } catch {
+        setPrices({
+          'BTC': { price: 98450+Math.random()*400-200, change: 1.2+Math.random()*0.5-0.25 },
+          'ETH': { price: 3780+Math.random()*40-20, change: 0.8+Math.random()*0.5-0.25 },
+          'SOL': { price: 178+Math.random()*10-5, change: 2.1+Math.random()*1-0.5 },
+        })
+      }
     }
-    go(); const iv = setInterval(go, 3000)
+    go(); const iv = setInterval(go, 5000)
     return () => clearInterval(iv)
   }, [])
   return (
@@ -60,8 +64,14 @@ export default function Dashboard() {
   const [orderStatus, setOrderStatus] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [chartPeriod, setChartPeriod] = useState('1M')
+  const [balance, setBalance] = useState<any>(null)
 
   useEffect(() => { const t = setInterval(() => setCurrentTime(new Date()), 1000); return () => clearInterval(t) }, [])
+
+  // Fetch OKX balance
+  useEffect(() => {
+    fetch('/api/trade').then(r=>r.json()).then(d=>{ if(d.success) setBalance(d) }).catch(()=>{})
+  }, [])
 
   const loadData = useCallback(async () => {
     const [pR,sR,aR,tR,posR,phR] = await Promise.all([
@@ -98,7 +108,7 @@ export default function Dashboard() {
   }, [loadData])
 
   const stats = useMemo(() => {
-    const tv = portfolio?.total_value || 100000
+    const tv = balance?.totalEq ? parseFloat(balance.totalEq) : (portfolio?.total_value || 100000)
     const opnl = positions.reduce((s,p) => s+(p.unrealized_pnl||0), 0)
     const todayT = trades.filter(t => new Date(t.timestamp).toDateString() === new Date().toDateString())
     const tpnl = todayT.reduce((s,t) => s+(t.pnl||0), 0)
@@ -106,7 +116,7 @@ export default function Dashboard() {
     const tot = trades.filter(t=>t.pnl!=null).length
     const wr = tot > 0 ? (ws/tot*100).toFixed(1) : '—'
     return { totalValue:tv, openPnl:opnl, todayPnl:tpnl, winRate:wr, maxDD:portfolio?.max_drawdown||0, openPos:positions.length }
-  }, [portfolio,positions,trades])
+  }, [portfolio,positions,trades,balance])
 
   const chartData = useMemo(() => {
     if (portfolioHistory.length > 2) return portfolioHistory.map((p,i) => ({ d:i+1, v:p.total_value||100000 }))
@@ -116,14 +126,219 @@ export default function Dashboard() {
   const placeOrder = async () => {
     if (!orderSize || parseFloat(orderSize)<=0 || submitting) return
     setSubmitting(true); setOrderStatus('')
-    const { error } = await supabase.from('trades').insert({
-      symbol:orderSymbol, side:orderSide, size:parseFloat(orderSize),
-      price: orderType==='limit'&&orderPrice ? parseFloat(orderPrice) : 0,
-      exchange:'okx', strategy:'manual', regime:'manual',
-      order_type:orderType, status:'pending', timestamp:new Date().toISOString(),
-    })
-    if (error) setOrderStatus('Error: '+error.message)
-    else { setOrderStatus(orderSide.toUpperCase()+' '+orderSize+' '+orderSymbol+' submitted'); setOrderSize(''); setOrderPrice(''); loadData() }
+
+    try {
+      // Call our API route which proxies to OKX
+      const res = await fetch('/api/trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: orderSymbol,
+          side: orderSide,
+          size: parseFloat(orderSize),
+          price: orderType==='limit'&&orderPrice ? parseFloat(orderPrice) : undefined,
+          orderType,
+        }),
+      })
+      const data = await res.json()
+
+      if (data.success) {
+        setOrderStatus(data.message + (data.mode==='paper'?' [PAPER]':''))
+        // Also log to Supabase
+        await supabase.from('trades').insert({
+          symbol:orderSymbol, side:orderSide, size:parseFloat(orderSize),
+          price: orderType==='limit'&&orderPrice ? parseFloat(orderPrice) : 0,
+          exchange:'okx', strategy:'manual', regime:'manual',
+          order_type:orderType, status:'filled',
+          order_id: data.orderId,
+          timestamp:new Date().toISOString(),
+        })
+        setOrderSize(''); setOrderPrice(''); loadData()
+      } else {
+        setOrderStatus('Error: ' + (data.error || 'Order failed'))
+        // Log failed order to Supabase too
+        await supabase.from('trades').insert({
+          symbol:orderSymbol, side:orderSide, size:parseFloat(orderSize),
+          price:0, exchange:'okx', strategy:'manual', regime:'manual',
+          order_type:orderType, status:'failed',
+          timestamp:new Date().toISOString(),
+        })
+        loadData()
+      }
+    } catch (err: any) {
+      setOrderStatus('Error: ' + (err.message || 'Network error'))
+    }
+
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { createClient } from '@supabase/supabase-js'
+import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+)
+
+const SYMBOLS = ['BTC/USDT','ETH/USDT','SOL/USDT','ARB/USDT','DOGE/USDT','AVAX/USDT','LINK/USDT','OP/USDT']
+
+function LiveTicker() {
+  const [prices, setPrices] = useState<Record<string,{price:number;change:number}>>({})
+  useEffect(() => {
+    const go = async () => {
+      try {
+        const res = await fetch('/api/prices')
+        const data = await res.json()
+        if (data.prices) setPrices(Object.fromEntries(Object.entries(data.prices).map(([k,v]:any)=>([k,{price:v.price,change:v.change}]))))
+      } catch {
+        setPrices({
+          'BTC': { price: 98450+Math.random()*400-200, change: 1.2+Math.random()*0.5-0.25 },
+          'ETH': { price: 3780+Math.random()*40-20, change: 0.8+Math.random()*0.5-0.25 },
+          'SOL': { price: 178+Math.random()*10-5, change: 2.1+Math.random()*1-0.5 },
+        })
+      }
+    }
+    go(); const iv = setInterval(go, 5000)
+    return () => clearInterval(iv)
+  }, [])
+  return (
+    <div className="flex items-center gap-6 px-5 py-1.5 overflow-x-auto" style={{ background:'var(--bg-primary)', borderBottom:'1px solid var(--border)' }}>
+      {Object.entries(prices).map(([sym, d]) => (
+        <div key={sym} className="flex items-center gap-2 text-xs whitespace-nowrap">
+          <span className="font-medium">{sym}</span>
+          <span className="font-mono">{d.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+          <span className={d.change >= 0 ? 'green-text' : 'red-text'}>{d.change >= 0 ? '+' : ''}{d.change.toFixed(2)}%</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ChartTip({ active, payload }: any) {
+  if (!active || !payload?.length) return null
+  return (<div className="okx-card px-3 py-2 text-xs" style={{ border:'1px solid var(--border)' }}><div className="font-mono font-medium">${payload[0].value.toLocaleString()}</div></div>)
+}
+
+export default function Dashboard() {
+  const [activeTab, setActiveTab] = useState('overview')
+  const [trades, setTrades] = useState<any[]>([])
+  const [positions, setPositions] = useState<any[]>([])
+  const [alerts, setAlerts] = useState<any[]>([])
+  const [strategies, setStrategies] = useState<any[]>([])
+  const [portfolio, setPortfolio] = useState<any>(null)
+  const [portfolioHistory, setPortfolioHistory] = useState<any[]>([])
+  const [currentTime, setCurrentTime] = useState(new Date())
+  const [orderSymbol, setOrderSymbol] = useState('BTC/USDT')
+  const [orderSide, setOrderSide] = useState('buy')
+  const [orderSize, setOrderSize] = useState('')
+  const [orderPrice, setOrderPrice] = useState('')
+  const [orderType, setOrderType] = useState('market')
+  const [orderStatus, setOrderStatus] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [chartPeriod, setChartPeriod] = useState('1M')
+  const [balance, setBalance] = useState<any>(null)
+
+  useEffect(() => { const t = setInterval(() => setCurrentTime(new Date()), 1000); return () => clearInterval(t) }, [])
+
+  // Fetch OKX balance
+  useEffect(() => {
+    fetch('/api/trade').then(r=>r.json()).then(d=>{ if(d.success) setBalance(d) }).catch(()=>{})
+  }, [])
+
+  const loadData = useCallback(async () => {
+    const [pR,sR,aR,tR,posR,phR] = await Promise.all([
+      supabase.from('portfolio_snapshots').select('*').order('timestamp',{ascending:false}).limit(1),
+      supabase.from('strategy_performance').select('*').order('total_pnl',{ascending:false}),
+      supabase.from('system_alerts').select('*').order('timestamp',{ascending:false}).limit(20),
+      supabase.from('trades').select('*').order('timestamp',{ascending:false}).limit(100),
+      supabase.from('positions').select('*').order('opened_at',{ascending:false}),
+      supabase.from('portfolio_snapshots').select('*').order('timestamp',{ascending:false}).limit(90),
+    ])
+    if (pR.data?.length) setPortfolio(pR.data[0])
+    if (sR.data) setStrategies(sR.data)
+    if (aR.data) setAlerts(aR.data)
+    if (tR.data) setTrades(tR.data)
+    if (posR.data) setPositions(posR.data)
+    if (phR.data) setPortfolioHistory(phR.data.reverse())
+  }, [])
+
+  useEffect(() => {
+    loadData()
+    const sub = supabase.channel('rt-all')
+      .on('postgres_changes',{event:'*',schema:'public',table:'trades'},(p:any)=>{
+        if(p.eventType==='INSERT') setTrades(prev=>[p.new,...prev].slice(0,100))
+      })
+      .on('postgres_changes',{event:'*',schema:'public',table:'positions'},()=>{
+        supabase.from('positions').select('*').order('opened_at',{ascending:false}).then(r=>{if(r.data) setPositions(r.data)})
+      })
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'system_alerts'},(p:any)=>{
+        setAlerts(prev=>[p.new,...prev].slice(0,20))
+      })
+      .on('postgres_changes',{event:'*',schema:'public',table:'portfolio_snapshots'},()=>loadData())
+      .subscribe()
+    return ()=>{supabase.removeChannel(sub)}
+  }, [loadData])
+
+  const stats = useMemo(() => {
+    const tv = balance?.totalEq ? parseFloat(balance.totalEq) : (portfolio?.total_value || 100000)
+    const opnl = positions.reduce((s,p) => s+(p.unrealized_pnl||0), 0)
+    const todayT = trades.filter(t => new Date(t.timestamp).toDateString() === new Date().toDateString())
+    const tpnl = todayT.reduce((s,t) => s+(t.pnl||0), 0)
+    const ws = trades.filter(t=>(t.pnl||0)>0).length
+    const tot = trades.filter(t=>t.pnl!=null).length
+    const wr = tot > 0 ? (ws/tot*100).toFixed(1) : '—'
+    return { totalValue:tv, openPnl:opnl, todayPnl:tpnl, winRate:wr, maxDD:portfolio?.max_drawdown||0, openPos:positions.length }
+  }, [portfolio,positions,trades,balance])
+
+  const chartData = useMemo(() => {
+    if (portfolioHistory.length > 2) return portfolioHistory.map((p,i) => ({ d:i+1, v:p.total_value||100000 }))
+    return Array.from({length:30},(_,i) => ({ d:i+1, v:95000+Math.random()*8000+i*300 }))
+  }, [portfolioHistory])
+
+  const placeOrder = async () => {
+    if (!orderSize || parseFloat(orderSize)<=0 || submitting) return
+    setSubmitting(true); setOrderStatus('')
+
+    try {
+      // Call our API route which proxies to OKX
+      const res = await fetch('/api/trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: orderSymbol,
+          side: orderSide,
+          size: parseFloat(orderSize),
+          price: orderType==='limit'&&orderPrice ? parseFloat(orderPrice) : undefined,
+          orderType,
+        }),
+      })
+      const data = await res.json()
+
+      if (data.success) {
+        setOrderStatus(data.message + (data.mode==='paper'?' [PAPER]':''))
+        // Also log to Supabase
+        await supabase.from('trades').insert({
+          symbol:orderSymbol, side:orderSide, size:parseFloat(orderSize),
+          price: orderType==='limit'&&orderPrice ? parseFloat(orderPrice) : 0,
+          exchange:'okx', strategy:'manual', regime:'manual',
+          order_type:orderType, status:'filled',
+          order_id: data.orderId,
+          timestamp:new Date().toISOString(),
+        })
+        setOrderSize(''); setOrderPrice(''); loadData()
+      } else {
+        setOrderStatus('Error: ' + (data.error || 'Order failed'))
+        // Log failed order to Supabase too
+        await supabase.from('trades').insert({
+          symbol:orderSymbol, side:orderSide, size:parseFloat(orderSize),
+          price:0, exchange:'okx', strategy:'manual', regime:'manual',
+          order_type:orderType, status:'failed',
+          timestamp:new Date().toISOString(),
+        })
+        loadData()
+      }
+    } catch (err: any) {
+      setOrderStatus('Error: ' + (err.message || 'Network error'))
+    }
+
     setSubmitting(false)
     setTimeout(()=>setOrderStatus(''), 5000)
   }
@@ -151,10 +366,10 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-5">
             <div className="flex items-center gap-1.5 text-xs" style={{color:'var(--text-secondary)'}}>
-              <div className="w-1.5 h-1.5 rounded-full" style={{background:'var(--yellow)'}} /> OKX
+              <div className="w-1.5 h-1.5 rounded-full" style={{background:balance?.success?'var(--green)':'var(--yellow)'}} /> OKX
             </div>
             <div className="text-xs font-mono" style={{color:'var(--text-tertiary)'}}>{currentTime.toUTCString().slice(17,25)} UTC</div>
-            <div className="okx-badge okx-badge-yellow text-xs">Paper</div>
+            <div className={`okx-badge ${balance?.mode==='live'?'okx-badge-green':'okx-badge-yellow'} text-xs`}>{balance?.mode==='live'?'Live':'Paper'}</div>
           </div>
         </div>
       </header>
@@ -212,9 +427,9 @@ export default function Dashboard() {
               <div className="okx-card p-4">
                 <div className="text-sm font-medium mb-4">Assets</div>
                 <div className="space-y-3">
-                  {[{n:'OKX Spot',v:Math.round(stats.totalValue*0.6),p:60,c:'var(--green)'},{n:'OKX Perp',v:Math.round(stats.totalValue*0.4),p:40,c:'var(--blue)'}].map(a=>(
-                    <div key={a.n}><div className="flex justify-between text-sm mb-1"><span style={{color:'var(--text-secondary)'}}>{a.n}</span><span>${a.v.toLocaleString()}</span></div>
-                    <div className="w-full h-1.5 rounded-full" style={{background:'var(--bg-tertiary)'}}><div className="h-full rounded-full" style={{width:a.p+'%',background:a.c}}/></div></div>
+                  {(balance?.details||[{currency:'USDT',available:'60000',equity:'60000'},{currency:'BTC',available:'0',equity:'0'}]).slice(0,4).map((a:any,i:number)=>(
+                    <div key={i}><div className="flex justify-between text-sm mb-1"><span style={{color:'var(--text-secondary)'}}>{a.currency}</span><span>${parseFloat(a.equity||0).toLocaleString()}</span></div>
+                    <div className="w-full h-1.5 rounded-full" style={{background:'var(--bg-tertiary)'}}><div className="h-full rounded-full" style={{width:Math.min(parseFloat(a.equity||0)/stats.totalValue*100,100)+'%',background:i===0?'var(--green)':'var(--blue)'}}/></div></div>
                   ))}
                 </div>
                 <div className="mt-6">
@@ -283,13 +498,13 @@ export default function Dashboard() {
               <div>
                 <label className="text-xs block mb-1.5" style={{color:'var(--text-tertiary)'}}>Amount</label>
                 <input type="number" step="any" value={orderSize} onChange={e=>setOrderSize(e.target.value)} placeholder="0.00" className="okx-input"/>
-                <div className="flex gap-2 mt-2">{['25%','50%','75%','100%'].map(p=>(<button key={p} onClick={()=>setOrderSize(String(stats.totalValue*parseInt(p)/100/98000))} className="flex-1 text-xs py-1 rounded" style={{background:'var(--bg-tertiary)',color:'var(--text-tertiary)'}}>{p}</button>))}</div>
+                <div className="flex gap-2 mt-2">{['25%','50%','75%','100%'].map(p=>(<button key={p} onClick={()=>setOrderSize(String((stats.totalValue*parseInt(p)/100/98000).toFixed(6)))} className="flex-1 text-xs py-1 rounded" style={{background:'var(--bg-tertiary)',color:'var(--text-tertiary)'}}>{p}</button>))}</div>
               </div>
               <div className="text-xs" style={{color:'var(--text-tertiary)'}}>Route: {orderSide==='buy'?'OKX Spot':'OKX Perpetual'}</div>
               <button onClick={placeOrder} disabled={submitting||!orderSize} className="w-full py-3 rounded text-sm font-medium disabled:opacity-30 disabled:cursor-not-allowed" style={{background:orderSide==='buy'?'var(--green)':'var(--red)',color:'#fff'}}>
                 {submitting?'Placing...':(orderSide==='buy'?'Buy / Long':'Sell / Short')+' '+orderSymbol}
               </button>
-              {orderStatus&&(<div className={`text-xs p-2.5 rounded ${orderStatus.startsWith('Error')?'okx-badge-red':'okx-badge-green'}`}>{orderStatus}</div>)}
+              {orderStatus&&(<div className={`text-xs p-2.5 rounded mt-2 ${orderStatus.startsWith('Error')?'red-text':'green-text'}`} style={{background:'var(--bg-tertiary)'}}>{orderStatus}</div>)}
               <div style={{borderTop:'1px solid var(--border)'}} className="pt-4">
                 <div className="text-xs font-medium mb-3" style={{color:'var(--text-secondary)'}}>Risk Limits</div>
                 <div className="space-y-2 text-xs" style={{color:'var(--text-tertiary)'}}>
@@ -341,7 +556,7 @@ export default function Dashboard() {
               <table className="w-full okx-table">
                 <thead><tr><th>Pair</th><th>Side</th><th className="text-right">Size</th><th className="text-right">Entry Price</th><th className="text-right">Mark Price</th><th className="text-right">Unrealized PnL</th><th className="text-right">ROE%</th><th className="text-right">Leverage</th><th>Exchange</th><th>Strategy</th><th>Opened</th></tr></thead>
                 <tbody>
-                  {positions.length===0&&<tr><td colSpan={11} className="text-center py-16" style={{color:'var(--text-tertiary)'}}>No open positions. Positions appear when the engine executes trades.</td></tr>}
+                  {positions.length===0&&<tr><td colSpan={11} className="text-center py-16" style={{color:'var(--text-tertiary)'}}>No open positions</td></tr>}
                   {positions.map((p,i)=>(
                     <tr key={i}>
                       <td className="font-medium">{p.symbol}</td>
@@ -362,18 +577,9 @@ export default function Dashboard() {
             </div>
             {positions.length > 0 && (
               <div className="grid grid-cols-3 gap-4">
-                <div className="okx-card p-4">
-                  <div className="text-xs mb-1.5" style={{color:'var(--text-tertiary)'}}>Total Unrealized PnL</div>
-                  <div className={`text-xl font-semibold ${stats.openPnl>=0?'green-text':'red-text'}`}>{stats.openPnl>=0?'+':''}${stats.openPnl.toFixed(2)}</div>
-                </div>
-                <div className="okx-card p-4">
-                  <div className="text-xs mb-1.5" style={{color:'var(--text-tertiary)'}}>Total Exposure</div>
-                  <div className="text-xl font-semibold">${positions.reduce((s,p)=>s+(p.size*p.entry_price||0),0).toLocaleString()}</div>
-                </div>
-                <div className="okx-card p-4">
-                  <div className="text-xs mb-1.5" style={{color:'var(--text-tertiary)'}}>Avg Leverage</div>
-                  <div className="text-xl font-semibold">{positions.length>0?(positions.reduce((s,p)=>s+(p.leverage||1),0)/positions.length).toFixed(1):'0'}x</div>
-                </div>
+                <div className="okx-card p-4"><div className="text-xs mb-1.5" style={{color:'var(--text-tertiary)'}}>Total Unrealized PnL</div><div className={`text-xl font-semibold ${stats.openPnl>=0?'green-text':'red-text'}`}>{stats.openPnl>=0?'+':''}${stats.openPnl.toFixed(2)}</div></div>
+                <div className="okx-card p-4"><div className="text-xs mb-1.5" style={{color:'var(--text-tertiary)'}}>Total Exposure</div><div className="text-xl font-semibold">${positions.reduce((s,p)=>s+(p.size*p.entry_price||0),0).toLocaleString()}</div></div>
+                <div className="okx-card p-4"><div className="text-xs mb-1.5" style={{color:'var(--text-tertiary)'}}>Avg Leverage</div><div className="text-xl font-semibold">{positions.length>0?(positions.reduce((s,p)=>s+(p.leverage||1),0)/positions.length).toFixed(1):'0'}x</div></div>
               </div>
             )}
           </div>
@@ -425,7 +631,7 @@ export default function Dashboard() {
               {[
                 {l:'Max Risk / Trade',v:'2%',ok:true},{l:'Max Exposure',v:'20%',ok:true},{l:'Max Leverage',v:'3x',ok:true},
                 {l:'Max Drawdown',v:'10%',ok:true},{l:'Daily Loss Limit',v:'5%',ok:true},{l:'Max Trades / Day',v:'20',ok:true},
-                {l:'Volatility Pause',v:'> 6%',ok:true},{l:'Position Cap',v:'3% of portfolio',ok:true},{l:'Engine Mode',v:'Paper Trading',ok:false},
+                {l:'Volatility Pause',v:'> 6%',ok:true},{l:'Position Cap',v:'3% of portfolio',ok:true},{l:'Engine Mode',v:balance?.mode==='live'?'LIVE':'Paper',ok:balance?.mode==='live'},
               ].map(r=>(
                 <div key={r.l} className="okx-card p-4">
                   <div className="flex items-center justify-between mb-2">
@@ -439,7 +645,7 @@ export default function Dashboard() {
             <div className="okx-card p-4">
               <div className="text-sm font-medium mb-3">System Health</div>
               <div className="grid grid-cols-4 gap-4 text-xs">
-                <div><div style={{color:'var(--text-tertiary)'}}>Engine Uptime</div><div className="text-sm font-mono mt-1 green-text">Online</div></div>
+                <div><div style={{color:'var(--text-tertiary)'}}>OKX Connection</div><div className={`text-sm font-mono mt-1 ${balance?.success?'green-text':'red-text'}`}>{balance?.success?'Connected':'Disconnected'}</div></div>
                 <div><div style={{color:'var(--text-tertiary)'}}>Last Heartbeat</div><div className="text-sm font-mono mt-1">{currentTime.toLocaleTimeString()}</div></div>
                 <div><div style={{color:'var(--text-tertiary)'}}>Trades Today</div><div className="text-sm font-mono mt-1">{trades.filter(t=>new Date(t.timestamp).toDateString()===new Date().toDateString()).length}/20</div></div>
                 <div><div style={{color:'var(--text-tertiary)'}}>Supabase</div><div className="text-sm font-mono mt-1 green-text">Connected</div></div>
